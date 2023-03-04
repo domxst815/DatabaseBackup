@@ -19,6 +19,71 @@ class DatabaseBackup
     }
 
     /**
+     * Questo metodo è usato per eesguire il backup da un DB MySQL ad un DB SQLite
+     * 
+     * @return void
+     */
+    public function backup_from_sql(): void
+    {
+        $this->create_sql_dump();
+        $this->mysql2sqlite();
+
+        $sqlite = new SQLite3('sqlite.db');
+
+        $sql = file_get_contents($_ENV['BACKUP_FILE']);
+
+        $sql = explode(';', $sql);
+        foreach ($sql as $query) {
+            if (str_starts_with($query, '--')) {
+                continue;
+            }
+
+            $query = preg_replace("/(^[\r\n]*|[\r\n]+)[\s\t]*[\r\n]+/", "\n", $query);
+            $query .= ';';
+            $query = trim($query);
+
+            $sqlite->query($query);
+        }
+
+        $sqlite->close();
+    }
+
+    /**
+     * Questo metodo è usato per eseguire eseguire un restore da un DB SQLite ad un DB MySQL
+     * 
+     * @return void
+     */
+    public function restore_from_sqlite(): void
+    {
+        $this->create_sqlite_dump();
+
+        // Connect to database
+        $conn = mysqli_connect(self::$host, self::$username, self::$password, self::$dbName);
+        if (!$conn) {
+            die("Connection failed: " . mysqli_connect_error());
+        }
+
+        mysqli_query($conn, 'SET foreign_key_checks = 0');
+
+        $file = $_ENV["RESTORE_FILE"];
+        $multi_query = file_get_contents($file);
+        $multi_query = preg_replace('/[\x00-\x1F\x7F-\xFF]/', '', $multi_query);
+
+        try {
+            mysqli_multi_query($conn, $multi_query);
+            while (mysqli_next_result($conn)) {
+                if (!mysqli_more_results($conn)) break;
+            }
+        } catch (\Exception $e) {
+            die($e);
+        }
+
+        mysqli_query($conn, 'SET foreign_key_checks = 1');
+
+        mysqli_close($conn);
+    }
+
+    /**
      * Questo metodo è usato per creare un file .sql per contenere tutte le query MySQL
      * 
      * @return string
@@ -74,40 +139,6 @@ class DatabaseBackup
         mysqli_close($conn);
 
         return file_put_contents($_ENV["BACKUP_FILE"], $return);
-    }
-
-    /**
-     * Questo metodo è usato per eseguire eseguire un restore da un DB SQLite ad un DB MySQL
-     * 
-     * @return void
-     */
-    public function restore(): void
-    {
-
-        // Connect to database
-        $conn = mysqli_connect(self::$host, self::$username, self::$password, self::$dbName);
-        if (!$conn) {
-            die("Connection failed: " . mysqli_connect_error());
-        }
-
-        mysqli_query($conn, 'SET foreign_key_checks = 0');
-
-        $file = $_ENV["BACKUP_FILE"];
-        $multi_query = file_get_contents($file);
-        $multi_query = preg_replace('/[\x00-\x1F\x7F-\xFF]/', '', $multi_query);
-
-        try {
-            mysqli_multi_query($conn, $multi_query);
-            while (mysqli_next_result($conn)) {
-                if (!mysqli_more_results($conn)) break;
-            }
-        } catch (\Exception $e) {
-            die($e);
-        }
-
-        mysqli_query($conn, 'SET foreign_key_checks = 1');
-
-        mysqli_close($conn);
     }
 
     /**
@@ -195,6 +226,8 @@ class DatabaseBackup
 
         $sqlite .= "\n\n" . implode("\n", $keys) . "\n\n";
 
+        $sqlite .= $this->add_structure_table() . "\n\n";
+
         $sqlite .= "COMMIT;\n" .
             "PRAGMA ignore_check_constraints = ON;\n" .
             "PRAGMA foreign_keys = ON;\n" .
@@ -205,35 +238,44 @@ class DatabaseBackup
         file_put_contents($_ENV["BACKUP_FILE"], $sqlite);
     }
 
-    /**
-     * Questo metodo è usato per eesguire il backup da un DB MySQL ad un DB SQLite
-     * 
-     * @return void
-     */
-    public function backup_from_sql(): void
+
+    public function add_structure_table(): string
     {
+        $tables = array();
+        $return = '';
 
-        $this->create_sql_dump();
-        $this->mysql2sqlite();
-
-        $sqlite = new SQLite3('sqlite.db');
-
-        $sql = file_get_contents($_ENV['BACKUP_FILE']);
-
-        $sql = explode(';', $sql);
-        foreach ($sql as $query) {
-            if (str_starts_with($query, '--')) {
-                continue;
-            }
-
-            $query = preg_replace("/(^[\r\n]*|[\r\n]+)[\s\t]*[\r\n]+/", "\n", $query);
-            $query .= ';';
-            $query = trim($query);
-
-            $sqlite->query($query);
+        // Connect to database
+        $conn = mysqli_connect(self::$host, self::$username, self::$password, self::$dbName);
+        if (!$conn) {
+            die("Connection failed: " . mysqli_connect_error());
         }
 
-        $sqlite->close();
+        $result = mysqli_query($conn, "SHOW TABLES");
+        while ($row = mysqli_fetch_row($result)) {
+            $tables[] = $row[0];
+        }
+
+        $return .= "CREATE TABLE IF NOT EXISTS `struttura` (`id` TEXT NOT NULL, `table_name` TEXT NOT NULL, `col` TEXT NOT NULL, `type` TEXT NOT NULL, PRIMARY KEY (`id`)); \n";
+
+        $id = 0;
+        foreach ($tables as $table) {
+            $results = mysqli_query($conn, "SHOW COLUMNS FROM $table");
+            if (!$results) {
+                mysqli_close($conn);
+                die("Query failed!");
+            }
+
+            while ($row = mysqli_fetch_array($results)) {
+                $field = $row[0];
+                $type = $row[1];
+                $id = $id += 1;
+                $return .= "INSERT INTO struttura VALUES ($id, '$table','$field','$type'); \n";
+            }
+        }
+
+        mysqli_close($conn);
+
+        return $return;
     }
 
     /**
@@ -258,14 +300,37 @@ class DatabaseBackup
         }
 
         foreach ($tables as $table) {
-            $result = $sqlite->query("SELECT sql FROM sqlite_master WHERE name='$table';");
+            if ($table === "struttura") continue;
 
-            if (!$result) die("Errore durante l'esecuzione della query 2");
+            $return .= "CREATE TABLE IF NOT EXISTS `$table` ( \n";
+            $result = $sqlite->query("PRAGMA table_info('$table')");
 
-            while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-                $row['sql'] = str_replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS", $row['sql']);
-                $return .= $row['sql'] . "; \n\n";
+            while ($row = $result->fetchArray()) {
+                $col = $row[1];
+                $query = $sqlite->query("SELECT * FROM struttura WHERE table_name = '$table' AND col = '$col';")->fetchArray();
+                $type = $query['type'];
+                $not_null = $row['notnull'];
+                $default_value = $row[4];
+                $return .= "`$col` $type ";
+                if ($not_null) {
+                    $return .= "NOT NULL ";
+                }
+
+                if (isset($default_value)) {
+                    $return .= "DEFAULT " . $default_value . " ";
+                }
+
+                $return = trim($return);
+                $return .= ",\n";
             }
+
+            while ($row = $result->fetchArray()) {
+                if ($row['pk']) {
+                    $return .= "PRIMARY KEY (`$row[1]`) \n";
+                }
+            }
+
+            $return .= "); \n\n";
 
             $values = $sqlite->query("SELECT * FROM $table");
             $colCount = $values->numColumns();
@@ -281,7 +346,7 @@ class DatabaseBackup
                     }
 
                     if ($i < ($colCount - 1)) {
-                        $return .= ";";
+                        $return .= ",";
                     }
                 }
 
@@ -289,13 +354,7 @@ class DatabaseBackup
             }
             $return .= "\n";
         }
-
-        echo "<pre>";
-        echo $return;
-        echo "</pre>";
-
         $sqlite->close();
-        echo "chiuso <br>";
 
         return file_put_contents($_ENV["RESTORE_FILE"], $return);
     }
