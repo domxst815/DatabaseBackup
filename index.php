@@ -6,6 +6,8 @@
 
         <input name="submit" type="submit" value="backup">
         <input name="submit" type="submit" value="restore">
+        <input name="submit" type="submit" value="create_sql_dump">
+        <input name="submit" type="submit" value="create_sqlite_dump">
 
     </form>
 
@@ -33,6 +35,12 @@ if (isset($_POST["submit"])) {
             break;
         case "restore":
             $var->restore_from_sqlite();
+            break;
+        case "create_sql_dump":
+            $var->create_sql_dump();
+            break;
+        case "create_sqlite_dump":
+            $var->create_sqlite_dump();
             break;
     }
 }

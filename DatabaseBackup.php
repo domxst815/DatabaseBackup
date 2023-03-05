@@ -119,6 +119,7 @@ class DatabaseBackup
             while ($row = mysqli_fetch_row($result)) {
                 $return .= "INSERT INTO $table VALUES(";
                 for ($i = 0; $i < $columnCount; $i++) {
+
                     if (isset($row[$i])) {
                         $row[$i] = mysqli_real_escape_string($conn, $row[$i]);
                         $row[$i] = str_replace("\n", "\\n", $row[$i]);
@@ -126,11 +127,12 @@ class DatabaseBackup
                     } else {
                         $return .= 'null';
                     }
-                    if ($i < ($columnCount - 1)) {
 
+                    if ($i < ($columnCount - 1)) {
                         $return .= ',';
                     }
                 }
+
                 $return .= ");\n";
             }
         }
@@ -336,7 +338,9 @@ class DatabaseBackup
             $colCount = $values->numColumns();
 
             while ($row = $values->fetchArray()) {
-                $return .= "INSERT INTO $table VALUES(";
+                $fields = array();
+
+                $return .= "INSERT IGNORE INTO $table VALUES(";
                 for ($i = 0; $i < $colCount; $i++) {
                     if (isset($row[$i])) {
                         $row[$i] = str_replace("\n", "\\n", $row[$i]);
@@ -345,12 +349,30 @@ class DatabaseBackup
                         $return .= "null";
                     }
 
+                    // while ($value = current($row)) {
+                    //     if (!is_numeric(key($row))) {
+                    //         $fields[key($row)] = $value;
+                    //     }
+
+                    //     next($row);
+                    // }
+
                     if ($i < ($colCount - 1)) {
                         $return .= ",";
                     }
                 }
 
-                $return .= ");\n";
+                // $return .= ")\nWHERE NOT EXISTS(SELECT * FROM $table WHERE ";
+
+                // foreach ($fields as $index => $value) {
+                //     $return .= "$index='$value'";
+
+                //     if ($index !== array_key_last($fields)) {
+                //         $return .= " AND ";
+                //     }
+                // }
+
+                $return .= "); \n";
             }
             $return .= "\n";
         }
